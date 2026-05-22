@@ -172,7 +172,7 @@ envs/dev/global/backend.hcl
 envs/dev/regional/backend.hcl
 ```
 
-Environment staging and production backend blocks contain shared settings only. GitHub Actions supplies bucket, key, and region at `terraform init`, so state bucket names and account IDs do not need to be committed for those roots.
+Environment staging and production backend blocks contain placeholder bucket, key, and region values so `terraform validate` works in CI. GitHub Actions override those placeholders at `terraform init`, so real state bucket names and account IDs do not need to be committed for those roots.
 
 ## Local Profiles
 
