@@ -1,43 +1,33 @@
 locals {
-  role_name = var.role_name != null ? var.role_name : "${var.app_name}-${var.github_environment}-github-actions"
+  role_name        = var.role_name != null ? var.role_name : "${var.app_name}-${var.github_environment}-github-actions"
+  state_bucket_arn = "arn:${data.aws_partition.current.partition}:s3:::${var.state_bucket_name}"
 }
 
-resource "aws_iam_openid_connect_provider" "github" {
-  url = "https://token.actions.githubusercontent.com"
+data "aws_partition" "current" {}
 
+module "github_oidc_provider" {
+  source  = "terraform-aws-modules/iam/aws//modules/iam-oidc-provider"
+  version = "~> 6.0"
+
+  url            = "https://token.actions.githubusercontent.com"
   client_id_list = ["sts.amazonaws.com"]
-
-  thumbprint_list = [
-    "6938fd4d98bab03faadb97b34396831e3780aea1",
-  ]
 }
 
-data "aws_iam_policy_document" "assume_role" {
-  statement {
-    actions = ["sts:AssumeRoleWithWebIdentity"]
+module "github_actions_role" {
+  source  = "terraform-aws-modules/iam/aws//modules/iam-role"
+  version = "~> 6.0"
 
-    principals {
-      type        = "Federated"
-      identifiers = [aws_iam_openid_connect_provider.github.arn]
-    }
+  name            = local.role_name
+  use_name_prefix = false
 
-    condition {
-      test     = "StringEquals"
-      variable = "token.actions.githubusercontent.com:aud"
-      values   = ["sts.amazonaws.com"]
-    }
+  enable_github_oidc = true
+  oidc_subjects      = ["${var.github_owner}/${var.github_repo}:environment:${var.github_environment}"]
 
-    condition {
-      test     = "StringEquals"
-      variable = "token.actions.githubusercontent.com:sub"
-      values   = ["repo:${var.github_owner}/${var.github_repo}:environment:${var.github_environment}"]
-    }
+  policies = {
+    AdministratorAccess = "arn:${data.aws_partition.current.partition}:iam::aws:policy/AdministratorAccess"
   }
-}
 
-resource "aws_iam_role" "github_actions" {
-  name               = local.role_name
-  assume_role_policy = data.aws_iam_policy_document.assume_role.json
+  depends_on = [module.github_oidc_provider]
 }
 
 data "aws_iam_policy_document" "github_actions" {
@@ -54,7 +44,7 @@ data "aws_iam_policy_document" "github_actions" {
     actions = [
       "s3:GetBucketLocation",
     ]
-    resources = ["arn:aws:s3:::${var.state_bucket_name}"]
+    resources = [local.state_bucket_arn]
   }
 
   statement {
@@ -62,7 +52,7 @@ data "aws_iam_policy_document" "github_actions" {
     actions = [
       "s3:ListBucket",
     ]
-    resources = ["arn:aws:s3:::${var.state_bucket_name}"]
+    resources = [local.state_bucket_arn]
 
     condition {
       test     = "StringLike"
@@ -78,18 +68,13 @@ data "aws_iam_policy_document" "github_actions" {
       "s3:GetObject",
       "s3:PutObject",
     ]
-    resources = ["arn:aws:s3:::${var.state_bucket_name}/${var.state_key_prefix}/*"]
+    resources = ["${local.state_bucket_arn}/${var.state_key_prefix}/*"]
   }
 
 }
 
 resource "aws_iam_role_policy" "github_actions" {
   name   = "${local.role_name}-policy"
-  role   = aws_iam_role.github_actions.id
+  role   = module.github_actions_role.name
   policy = data.aws_iam_policy_document.github_actions.json
-}
-
-resource "aws_iam_role_policy_attachment" "github_actions_deployment" {
-  role       = aws_iam_role.github_actions.name
-  policy_arn = "arn:aws:iam::aws:policy/AdministratorAccess"
 }

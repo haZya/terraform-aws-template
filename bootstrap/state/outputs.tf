@@ -1,11 +1,11 @@
 output "state_bucket_arn" {
   description = "ARN of the S3 bucket used for Terraform state."
-  value       = aws_s3_bucket.terraform_state.arn
+  value       = module.terraform_state.s3_bucket_arn
 }
 
 output "state_bucket_name" {
   description = "Name of the S3 bucket used for Terraform state."
-  value       = aws_s3_bucket.terraform_state.bucket
+  value       = module.terraform_state.s3_bucket_id
 }
 
 output "state_bucket_region" {
