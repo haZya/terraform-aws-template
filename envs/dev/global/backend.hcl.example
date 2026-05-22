@@ -2,5 +2,3 @@ bucket       = "example-app-terraform-state-000000000000"
 key          = "example-app/dev/111111111111/global/terraform.tfstate"
 region       = "ap-southeast-2"
 profile      = "dev"
-encrypt      = true
-use_lockfile = true

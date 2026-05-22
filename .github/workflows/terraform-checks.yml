@@ -152,7 +152,7 @@ jobs:
           TF_PLAN_OUTPUT: ${{ runner.temp }}/terraform-plan-staging-global.txt
         run: |
           set +e
-          terraform plan -lock=false -no-color > "$TF_PLAN_OUTPUT" 2>&1
+          terraform plan -lock-timeout=5m -no-color > "$TF_PLAN_OUTPUT" 2>&1
           exit_code=$?
           cat "$TF_PLAN_OUTPUT"
           echo "exit_code=$exit_code" >> "$GITHUB_OUTPUT"
@@ -306,7 +306,7 @@ jobs:
           TF_PLAN_OUTPUT: ${{ runner.temp }}/terraform-plan-staging-regional-${{ matrix.region }}.txt
         run: |
           set +e
-          terraform plan -lock=false -no-color > "$TF_PLAN_OUTPUT" 2>&1
+          terraform plan -lock-timeout=5m -no-color > "$TF_PLAN_OUTPUT" 2>&1
           exit_code=$?
           cat "$TF_PLAN_OUTPUT"
           echo "exit_code=$exit_code" >> "$GITHUB_OUTPUT"

@@ -5,6 +5,7 @@
 *.tfvars.json
 !*.tfvars.example
 backend.hcl
+bootstrap/**/backend.tf
 tfplan
 *.tfplan
 crash.log
