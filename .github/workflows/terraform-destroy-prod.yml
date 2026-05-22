@@ -1,0 +1,220 @@
+name: Terraform Destroy Prod
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirmation:
+        description: Type "destroy production" to confirm.
+        type: string
+        required: true
+      region:
+        description: Region to destroy, or "all" for all configured regions.
+        type: string
+        required: true
+        default: all
+
+permissions:
+  contents: read
+
+env:
+  TF_INPUT: false
+  TF_IN_AUTOMATION: true
+
+jobs:
+  resolve-regions:
+    name: Resolve Regions
+    runs-on: ubuntu-latest
+    outputs:
+      regions: ${{ steps.resolve.outputs.regions }}
+
+    steps:
+      - name: Resolve target regions
+        id: resolve
+        env:
+          INPUT_REGION: ${{ inputs.region }}
+          AWS_REGION: ${{ vars.AWS_REGION }}
+          AWS_REGIONS_JSON: ${{ vars.AWS_REGIONS_JSON }}
+        run: |
+          if [ "$INPUT_REGION" = "all" ]; then
+            if [ -n "$AWS_REGIONS_JSON" ]; then
+              regions="$AWS_REGIONS_JSON"
+            elif [ -n "$AWS_REGION" ]; then
+              regions="$(jq -cn --arg region "$AWS_REGION" '[$region]')"
+            else
+              regions='["ap-southeast-2"]'
+            fi
+          elif [ -n "$INPUT_REGION" ]; then
+            regions="$(jq -cn --arg region "$INPUT_REGION" '[$region]')"
+          else
+            echo "::error::Set region to a region name or all."
+            exit 1
+          fi
+
+          echo "$regions" | jq -e 'type == "array" and length > 0 and all(.[]; type == "string" and length > 0)' > /dev/null
+          echo "Resolved regions: $regions"
+          echo "regions=$regions" >> "$GITHUB_OUTPUT"
+
+  destroy-prod-regional:
+    name: Destroy Prod Regional (${{ matrix.region }})
+    runs-on: ubuntu-latest
+    needs:
+      - resolve-regions
+    if: inputs.confirmation == 'destroy production'
+    environment: production
+    strategy:
+      fail-fast: false
+      matrix:
+        region: ${{ fromJson(needs.resolve-regions.outputs.regions) }}
+    concurrency:
+      group: terraform-prod-${{ matrix.region }}
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      TF_WORKING_DIR: envs/prod/regional
+      TF_STATE_BUCKET: ${{ vars.TF_STATE_BUCKET }}
+      TF_STATE_KEY: ${{ vars.APP_NAME || 'example-app' }}/prod/${{ matrix.region }}/terraform.tfstate
+      TF_STATE_REGION: ${{ vars.TF_STATE_REGION || vars.AWS_REGION || matrix.region }}
+      TF_VAR_aws_account_id: ${{ vars.AWS_ACCOUNT_ID }}
+      TF_VAR_app_name: ${{ vars.APP_NAME || 'example-app' }}
+      TF_VAR_region: ${{ matrix.region }}
+      AWS_ROLE_ARN: ${{ vars.AWS_ROLE_ARN }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Check GitHub variables
+        run: |
+          missing=0
+
+          if [ -z "$AWS_ROLE_ARN" ]; then
+            echo "::error::Set AWS_ROLE_ARN on the production GitHub environment."
+            missing=1
+          fi
+
+          if [ -z "$TF_STATE_BUCKET" ]; then
+            echo "::error::Set TF_STATE_BUCKET as a repository variable or on the production GitHub environment."
+            missing=1
+          fi
+
+          if [ -z "$TF_VAR_aws_account_id" ]; then
+            echo "::error::Set AWS_ACCOUNT_ID on the production GitHub environment."
+            missing=1
+          fi
+
+          exit "$missing"
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          aws-region: ${{ matrix.region }}
+          role-to-assume: ${{ env.AWS_ROLE_ARN }}
+          allowed-account-ids: ${{ env.TF_VAR_aws_account_id }}
+          output-env-credentials: true
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_version: 1.15.0
+
+      - name: Terraform init
+        working-directory: ${{ env.TF_WORKING_DIR }}
+        run: |
+          terraform init -reconfigure \
+            -backend-config="bucket=${TF_STATE_BUCKET}" \
+            -backend-config="key=${TF_STATE_KEY}" \
+            -backend-config="region=${TF_STATE_REGION}" \
+            -backend-config="encrypt=true" \
+            -backend-config="use_lockfile=true"
+
+      - name: Terraform destroy
+        working-directory: ${{ env.TF_WORKING_DIR }}
+        run: terraform destroy -auto-approve
+
+  destroy-prod-global:
+    name: Destroy Prod Global
+    runs-on: ubuntu-latest
+    needs:
+      - destroy-prod-regional
+    if: always() && inputs.confirmation == 'destroy production' && inputs.region == 'all' && needs.destroy-prod-regional.result == 'success'
+    environment: production
+    concurrency:
+      group: terraform-prod-global
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      TF_WORKING_DIR: envs/prod/global
+      TF_STATE_BUCKET: ${{ vars.TF_STATE_BUCKET }}
+      TF_STATE_KEY: ${{ vars.APP_NAME || 'example-app' }}/prod/global/terraform.tfstate
+      TF_STATE_REGION: ${{ vars.TF_STATE_REGION || vars.AWS_REGION || 'ap-southeast-2' }}
+      TF_VAR_aws_account_id: ${{ vars.AWS_ACCOUNT_ID }}
+      TF_VAR_app_name: ${{ vars.APP_NAME || 'example-app' }}
+      TF_VAR_region: ${{ vars.TF_GLOBAL_REGION || vars.TF_STATE_REGION || vars.AWS_REGION || 'ap-southeast-2' }}
+      AWS_ROLE_ARN: ${{ vars.AWS_ROLE_ARN }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Check GitHub variables
+        run: |
+          missing=0
+
+          if [ -z "$AWS_ROLE_ARN" ]; then
+            echo "::error::Set AWS_ROLE_ARN on the production GitHub environment."
+            missing=1
+          fi
+
+          if [ -z "$TF_STATE_BUCKET" ]; then
+            echo "::error::Set TF_STATE_BUCKET as a repository variable or on the production GitHub environment."
+            missing=1
+          fi
+
+          if [ -z "$TF_VAR_aws_account_id" ]; then
+            echo "::error::Set AWS_ACCOUNT_ID on the production GitHub environment."
+            missing=1
+          fi
+
+          exit "$missing"
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          aws-region: ${{ env.TF_VAR_region }}
+          role-to-assume: ${{ env.AWS_ROLE_ARN }}
+          allowed-account-ids: ${{ env.TF_VAR_aws_account_id }}
+          output-env-credentials: true
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_version: 1.15.0
+
+      - name: Terraform init
+        working-directory: ${{ env.TF_WORKING_DIR }}
+        run: |
+          terraform init -reconfigure \
+            -backend-config="bucket=${TF_STATE_BUCKET}" \
+            -backend-config="key=${TF_STATE_KEY}" \
+            -backend-config="region=${TF_STATE_REGION}" \
+            -backend-config="encrypt=true" \
+            -backend-config="use_lockfile=true"
+
+      - name: Terraform destroy
+        working-directory: ${{ env.TF_WORKING_DIR }}
+        run: terraform destroy -auto-approve
+
+  invalid-confirmation:
+    name: Invalid Confirmation
+    runs-on: ubuntu-latest
+    if: inputs.confirmation != 'destroy production'
+
+    steps:
+      - name: Fail invalid confirmation
+        run: |
+          echo "::error::Confirmation must be exactly: destroy production"
+          exit 1

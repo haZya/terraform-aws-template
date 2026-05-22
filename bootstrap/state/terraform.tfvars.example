@@ -1,0 +1,23 @@
+region         = "ap-southeast-2"
+profile        = "state-account"
+aws_account_id = "000000000000"
+app_name       = "example-app"
+
+# Optional. If omitted, bootstrap uses "${app_name}-terraform-state-${current_account_id}".
+# state_bucket_name = "example-app-terraform-state-000000000000"
+
+# Add deployment principals and restrict each one to its own state prefix.
+# trusted_state_access = [
+#   {
+#     principal_arns = ["arn:aws:iam::111111111111:root"]
+#     key_prefix     = "example-app/dev/111111111111"
+#   },
+#   {
+#     principal_arns = ["arn:aws:iam::222222222222:role/example-app-staging-github-actions"]
+#     key_prefix     = "example-app/staging"
+#   },
+#   {
+#     principal_arns = ["arn:aws:iam::333333333333:role/example-app-production-github-actions"]
+#     key_prefix     = "example-app/prod"
+#   },
+# ]

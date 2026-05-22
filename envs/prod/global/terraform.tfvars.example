@@ -1,0 +1,5 @@
+region = "ap-southeast-2"
+app_name = "example-app"
+
+# Set the real value through CI or a local, ignored terraform.tfvars file.
+aws_account_id = "333333333333"

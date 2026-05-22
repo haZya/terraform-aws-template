@@ -1,0 +1,13 @@
+region         = "ap-southeast-2"
+profile        = "staging-admin"
+aws_account_id = "222222222222"
+app_name       = "example-app"
+
+github_owner = "your-github-owner"
+github_repo  = "your-repo-name"
+
+# This is the account that will own the shared Terraform state bucket.
+state_account_id = "000000000000"
+
+# Optional, if you do not want the default {app_name}-terraform-state-{state_account_id} name.
+# state_bucket_name = "custom-terraform-state-bucket-name"
