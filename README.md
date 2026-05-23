@@ -333,6 +333,15 @@ Configure these variables within your GitHub repository settings (`Settings > Se
 | `TF_GLOBAL_REGION` | Repository | No | — | Provider region for global stacks (e.g., must be `us-east-1` for CloudFront ACM certificates). |
 | `TF_STATE_REGION` | Repository | No | `us-east-1` | S3 bucket region. |
 
+### 3. Built-in Maintenance & Security Checks
+
+The template includes low-noise repository maintenance and IaC security checks that work without cloud credentials:
+
+- **Dependabot (`.github/dependabot.yml`)**: Opens grouped weekly pull requests for GitHub Actions and Terraform provider/module updates. Terraform directories use template-friendly glob patterns so newly added environments and modules are picked up automatically.
+- **Security Checks (`.github/workflows/security-checks.yml`)**: Runs Trivy IaC scanning on pull requests, pushes to `main`, and manual dispatches. It reports `HIGH` and `CRITICAL` Terraform/IaC misconfigurations in the workflow summary.
+
+Trivy is advisory by default and does not fail CI. This keeps fresh repositories usable during the initial bootstrap phase, where broad deployment permissions may intentionally exist. Once your IAM policies are hardened, change the Trivy `exit-code` from `"0"` to `"1"` if you want high-severity findings to block merges.
+
 ---
 
 ## 🛠️ Multi-Region Deployment Matrix Details
