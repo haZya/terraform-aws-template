@@ -32,7 +32,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v5
+        uses: actions/checkout@v6
 
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v4
@@ -99,7 +99,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v5
+        uses: actions/checkout@v6
 
       - name: Check GitHub variables
         run: |
@@ -161,7 +161,7 @@ jobs:
       - name: Comment Terraform plan
         if: always() && steps.plan.outcome != 'skipped'
         continue-on-error: true
-        uses: actions/github-script@v8
+        uses: actions/github-script@v9
         env:
           PLAN_EXIT_CODE: ${{ steps.plan.outputs.exit_code }}
           PLAN_MARKER: '<!-- terraform-plan:staging-global -->'
@@ -253,7 +253,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v5
+        uses: actions/checkout@v6
 
       - name: Check GitHub variables
         run: |
@@ -315,7 +315,7 @@ jobs:
       - name: Comment Terraform plan
         if: always() && steps.plan.outcome != 'skipped'
         continue-on-error: true
-        uses: actions/github-script@v8
+        uses: actions/github-script@v9
         env:
           PLAN_EXIT_CODE: ${{ steps.plan.outputs.exit_code }}
           PLAN_MARKER: '<!-- terraform-plan:staging-regional:${{ matrix.region }} -->'
