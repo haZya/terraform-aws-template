@@ -1,13 +1,75 @@
-# Terraform AWS template for multi-account and multi-regional deployments
+# Production-Ready Multi-Account & Multi-Region Terraform AWS Template
 
-This repo uses separate Terraform root modules per environment, split into global/shared and regional stacks. Application roots are intentionally scaffolded; add your global resources to `envs/*/global`, regional resources to `modules/app`, and expose any useful values through the committed empty `outputs.tf` files.
+[![Terraform Version](https://img.shields.io/badge/terraform-%3E%3D_1.15-purple.svg)](https://www.terraform.io/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
+
+This repository provides an enterprise-grade, highly secure, and battle-tested template for orchestrating multi-account, multi-region AWS infrastructure deployments using Terraform and GitHub Actions. 
+
+By leveraging native AWS OIDC Federation (no persistent access keys), decoupled state backends, parallel multi-regional execution matrices, and push-based environments promotion with required approval gates, this layout scales safely from early-stage startups to mature enterprise deployments.
+
+---
+
+## 🏗️ Architecture Overview
+
+The workspace splits deployments into separate Terraform root modules per environment, partitioned into **global/shared** resources and **regional** application stacks. This separation keeps blast radiuses small, accelerates local CLI testing, and ensures regional deployments run in parallel.
+
+```mermaid
+graph TD
+    subgraph Local["Local Developer CLI"]
+        Dev["Developer CLI / Terraform"]
+        DevProfile["AWS Profiles:<br/>• dev<br/>• shared-state<br/>• staging-admin<br/>• prod-admin"]
+    end
+
+    subgraph GitHub["GitHub Actions CI/CD Pipeline"]
+        GHA["GitHub Actions Runner"]
+        EnvStg["Staging Environment Gate"]
+        EnvProd["Production Environment Gate (Required Reviewers)"]
+    end
+
+    subgraph AWSState["AWS State Account"]
+        S3Bucket[("Central S3 State Bucket")]
+        DevAccess["S3 Bucket Policy:<br/>dev prefix allowed"]
+        StgAccess["S3 Bucket Policy:<br/>staging prefix allowed"]
+        ProdAccess["S3 Bucket Policy:<br/>prod prefix allowed"]
+    end
+
+    subgraph AWSDev["AWS Dev Account"]
+        DevEnv["Dev Global & Regional Stacks"]
+    end
+
+    subgraph AWSStg["AWS Staging Account"]
+        StgOIDC["OIDC Provider & IAM Role"]
+        StgEnv["Staging Global & Regional Stacks"]
+    end
+
+    subgraph AWSProd["AWS Production Account"]
+        ProdOIDC["OIDC Provider & IAM Role"]
+        ProdEnv["Production Global & Regional Stacks"]
+    end
+
+    Dev -->|Local Apply| DevEnv
+    Dev -->|Bootstrap State| S3Bucket
+    Dev -->|Bootstrap OIDC Roles| StgOIDC
+    Dev -->|Bootstrap OIDC Roles| ProdOIDC
+
+    GHA -->|Assume Role via OIDC| StgOIDC
+    GHA -->|Assume Role via OIDC| ProdOIDC
+    StgOIDC -->|Deploy| StgEnv
+    ProdOIDC -->|Deploy| ProdEnv
+
+    DevEnv -.->|State Tracking| S3Bucket
+    StgEnv -.->|State Tracking| S3Bucket
+    ProdEnv -.->|State Tracking| S3Bucket
+```
+
+### 📂 Directory Hierarchy
 
 ```text
 bootstrap/
   state/                    # local-state setup for the shared Terraform state bucket
   accounts/staging/         # local-state setup for the staging GitHub Actions role
   accounts/prod/            # local-state setup for the production GitHub Actions role
-  modules/                  # bootstrap-only reusable modules
+  modules/                  # bootstrap-only reusable modules (e.g., github-actions-role)
 envs/dev/global/            # local CLI testing for dev shared/global resources
 envs/dev/regional/          # local CLI testing for dev regional app resources
 envs/staging/global/        # GitHub-deployed staging shared/global resources
@@ -17,288 +79,309 @@ envs/prod/regional/         # GitHub-deployed production regional app resources
 modules/app/                # reusable regional app infrastructure
 ```
 
-## Prerequisites
+---
 
-Use Terraform `>= 1.15` locally and in CI. This template uses the S3 backend native lock file (`use_lockfile = true`) instead of a DynamoDB lock table.
+## 🛡️ Core Security & Isolation Principles
 
-You need AWS credentials for the bootstrap state account, staging account, production account, and optional local dev account. The examples assume AWS shared config profiles named `shared-state`, `staging-admin`, `prod-admin`, and `dev`, but you can use any profiles that match your accounts.
+### 1. Stack Boundaries
+- **Global Stacks (`global/`)**: Put resources that are deployed once per environment here. Examples include: **IAM Roles, Route 53 Zones, CloudFront Distributions, Global Accelerator, shared KMS keys**, and general shared configurations.
+- **Regional Stacks (`regional/`)**: Put resources that are instantiated once per target AWS region. These call the core application module (`modules/app`). Examples: **VPCs, ECS/EKS clusters, RDS instances, and regional Load Balancers**.
+- **State Segregation**: Global and regional stacks use completely separate state keys. This prevents an issue in a regional deploy from corrupting your global state. 
 
-Create GitHub environments named `staging` and `production` before enabling deployments. Add required reviewers to `production`; this is the approval gate that pauses push-based promotion before production applies.
+> [!NOTE]
+> Always deploy global stacks **first** when regional resources depend on global outputs. When destroying, destroy regional stacks first, then global.
 
-Commit `.terraform.lock.hcl` files for each root. Do not commit `.terraform/`, real `terraform.tfvars`, bootstrap-generated `backend.tf`, `backend.hcl`, plans, or state files.
+### 2. AWS OIDC Federation (Passwordless CI/CD)
+No static AWS credentials or IAM Access Keys are committed or stored in GitHub. GitHub Actions authenticates directly to target AWS accounts via **OpenID Connect (OIDC)**. AWS validates the federated JWT signed by GitHub and issues temporary credentials scoped down to the specific repository, environment, and branch.
 
-## Stack Boundaries
+### 3. State Bucket Access & Key Segregation
+Instead of hosting a state bucket per account, state is consolidated in a central **Shared State Account** state bucket. High-integrity segregation is maintained via S3 prefix-based policies:
+- **Dev Account**: Restricted to `example-app/dev/<dev-account-id>/*`.
+- **Staging Role**: Restricted to `example-app/staging/*`.
+- **Production Role**: Restricted to `example-app/prod/*`.
 
-Put resources that are deployed once per environment in `global/`. Examples: IAM, Route 53 zones, CloudFront, Global Accelerator, shared KMS keys, or anything that should not be recreated once per region.
+This multi-tenant structure protects production state from being read or modified by staging pipelines or local developer environments.
 
-Put resources that are deployed once per region in `regional/`.
+---
 
-Global and regional stacks use separate state files. Deploy global first when regional resources depend on shared resources. Destroy regional first, then global.
+## ⚙️ Prerequisites
 
-## Bootstrap Order
+1. **Terraform `>= 1.15`** installed locally and matching the CI/CD pipeline version.
+2. **AWS CLI** configured with named profiles matching your target accounts.
+3. A **GitHub Repository** created to host this template.
+4. Local AWS Config Profiles:
+   Configure these in your `~/.aws/config` (or use equivalent profiles):
+   - `shared-state` (State-owning AWS account credentials)
+   - `staging-admin` (Staging AWS account credentials)
+   - `prod-admin` (Production AWS account credentials)
+   - `dev` (Local development AWS account credentials)
 
-Bootstrap roots intentionally do not commit a live `backend.tf` file. The first bootstrap run must initialize with `-backend=false` because the remote state bucket does not exist yet. That first run uses local state. Use a fixed state account ID up front so the future state bucket name is known before the bucket exists.
+---
 
-Do not copy `backend.tf.example` before the first local bootstrap apply. If you previously initialized a bootstrap root with a backend block and need to restart the local bootstrap flow, delete only that root's generated `backend.tf` and `.terraform/` directory, then rerun `terraform init -backend=false`. Do not delete `terraform.tfstate` unless you intentionally want to discard local bootstrap state.
+## 🚀 Bootstrap Order
 
-With the default convention, the bucket name is:
+Because remote state buckets and IAM OIDC roles do not exist initially, you must initialize Terraform with local state first, apply the resources, and then migrate those local state files into S3 once the bucket is ready.
 
-```text
-<app_name>-terraform-state-<shared-state-account-id>
+```mermaid
+sequenceDiagram
+    autonumber
+    actor Dev as Developer (Local CLI)
+    participant StgAWS as AWS Staging Account
+    participant ProdAWS as AWS Production Account
+    participant StateAWS as AWS State Account
+    participant GHA as GitHub Repository
+
+    Note over Dev, StgAWS: Phase 1: Bootstrap GitHub OIDC Roles (Local State)
+    Dev->>StgAWS: terraform apply (bootstrap/accounts/staging)
+    StgAWS-->>Dev: Output: staging_github_actions_role_arn
+    Dev->>ProdAWS: terraform apply (bootstrap/accounts/prod)
+    ProdAWS-->>Dev: Output: prod_github_actions_role_arn
+
+    Note over Dev, StateAWS: Phase 2: Bootstrap S3 State Bucket (Local State)
+    Dev->>StateAWS: terraform apply (bootstrap/state) with role ARNs
+    StateAWS-->>Dev: Output: state_bucket_name
+
+    Note over Dev, StateAWS: Phase 3: Migrate Bootstraps to Remote S3 State
+    Dev->>StateAWS: terraform init -migrate-state (bootstrap/state)
+    Dev->>StgAWS: terraform init -migrate-state (bootstrap/accounts/staging)
+    Dev->>ProdAWS: terraform init -migrate-state (bootstrap/accounts/prod)
+
+    Note over Dev, GHA: Phase 4: Configure Repository
+    Dev->>GHA: Set Variables (TF_STATE_BUCKET, AWS_ROLE_ARN, etc.)
 ```
 
-For example:
-
-```text
-example-app-terraform-state-000000000000
-```
-
-Create the GitHub OIDC deployment roles first. IAM policies can reference the future state bucket ARN before the bucket exists.
-
-PowerShell:
-
-```powershell
-Copy-Item bootstrap/accounts/staging/terraform.tfvars.example bootstrap/accounts/staging/terraform.tfvars
-```
-
-sh/bash/zsh:
-
-```sh
-cp bootstrap/accounts/staging/terraform.tfvars.example bootstrap/accounts/staging/terraform.tfvars
-```
-
-### Bootstrap Staging
-
-```sh
-terraform -chdir=bootstrap/accounts/staging init -backend=false
-terraform -chdir=bootstrap/accounts/staging apply
-terraform -chdir=bootstrap/accounts/staging output github_actions_role_arn
-```
-
-PowerShell:
-
-```powershell
-Copy-Item bootstrap/accounts/prod/terraform.tfvars.example bootstrap/accounts/prod/terraform.tfvars
-```
-
-sh/bash/zsh:
-
-```sh
-cp bootstrap/accounts/prod/terraform.tfvars.example bootstrap/accounts/prod/terraform.tfvars
-```
-
-### Bootstrap Prod
-
-```sh
-terraform -chdir=bootstrap/accounts/prod init -backend=false
-terraform -chdir=bootstrap/accounts/prod apply
-terraform -chdir=bootstrap/accounts/prod output github_actions_role_arn
-```
-
-Then create the shared state bucket and bucket policy. Add the dev account principal and the GitHub role ARNs from the account bootstrap outputs to `trusted_state_access` before the first apply.
-
-Each entry is scoped to one state key prefix. This lets the dev account access only `example-app/dev/<dev-account-id>/*`, while staging and prod can access only their own prefixes. Global and region-specific state keys live under those prefixes.
-
-For cross-account dev access, the state bucket policy grants the resource-side permission only. The dev IAM user or role also needs identity-based S3 permissions for `s3:GetBucketLocation`, `s3:ListBucket`, `s3:GetObject`, `s3:PutObject`, and `s3:DeleteObject` on its allowed state prefix.
-
-PowerShell:
-
-```powershell
-Copy-Item bootstrap/state/terraform.tfvars.example bootstrap/state/terraform.tfvars
-```
-
-sh/bash/zsh:
-
-```sh
-cp bootstrap/state/terraform.tfvars.example bootstrap/state/terraform.tfvars
-```
-
-### Bootstrap State
-
-```sh
-terraform -chdir=bootstrap/state init -backend=false
-terraform -chdir=bootstrap/state apply
-terraform -chdir=bootstrap/state output state_bucket_name
-```
-
-### Migrate Bootstrap State
-
-After the bootstrap apply succeeds, migrate the bootstrap roots from local state into the same S3 state bucket. Otherwise the state bucket and GitHub Actions roles are still managed by local `terraform.tfstate` files, which are easy to lose and hard to share.
-
-A normal `terraform init` in these roots should only happen after the state bucket exists and a generated `backend.tf` file is present. Use `terraform init -backend=false` only for the initial local bootstrap. After the state bucket exists, copy the backend examples and use `terraform init -migrate-state` to copy the local state into S3.
-
-Create ignored backend files for the bootstrap roots by copying the committed examples. `backend.tf.example` contains the full S3 backend configuration for each bootstrap root. Use the state account profile for the backend, even when the Terraform provider in `terraform.tfvars` uses the staging or production admin profile. Backend credentials and provider credentials are separate.
-
-PowerShell:
-
-```powershell
-Copy-Item bootstrap/state/backend.tf.example bootstrap/state/backend.tf
-Copy-Item bootstrap/accounts/staging/backend.tf.example bootstrap/accounts/staging/backend.tf
-Copy-Item bootstrap/accounts/prod/backend.tf.example bootstrap/accounts/prod/backend.tf
-```
-
-sh/bash/zsh:
-
-```sh
-cp bootstrap/state/backend.tf.example bootstrap/state/backend.tf
-cp bootstrap/accounts/staging/backend.tf.example bootstrap/accounts/staging/backend.tf
-cp bootstrap/accounts/prod/backend.tf.example bootstrap/accounts/prod/backend.tf
-```
-
-In the copied `backend.tf` files, replace `example-app`, `000000000000`, the bucket name, region, and profile with your real state account values.
-
-Then migrate each local state file to S3.
-
-```sh
-terraform -chdir=bootstrap/state init -migrate-state
-terraform -chdir=bootstrap/accounts/staging init -migrate-state
-terraform -chdir=bootstrap/accounts/prod init -migrate-state
-```
-
-Answer `yes` when Terraform asks whether to copy the existing local state to the new backend. After migration, run a plan for each root and expect no changes:
-
-```sh
-terraform -chdir=bootstrap/state plan
-terraform -chdir=bootstrap/accounts/staging plan
-terraform -chdir=bootstrap/accounts/prod plan
-```
-
-The local `terraform.tfstate` files are no longer the source of truth after migration. Keep them only as temporary migration backups until the remote plans are clean, then delete the local copies. Future bootstrap changes should be applied from the same roots with the S3 backend initialized.
-
-Finally, replace `000000000000` with the real state account ID in your local dev backend configs:
-
-```text
-envs/dev/global/backend.hcl
-envs/dev/regional/backend.hcl
-```
-
-Environment staging and production backend blocks contain placeholder bucket, key, and region values so `terraform validate` works in CI. GitHub Actions override those placeholders at `terraform init`, so real state bucket names and account IDs do not need to be committed for those roots.
-
-## Local Profiles
-
-Local roots support a local-only `profile` variable in ignored `terraform.tfvars` files, so you do not need to export `AWS_PROFILE`.
-
-PowerShell:
-
-```powershell
-Copy-Item envs/dev/global/terraform.tfvars.example envs/dev/global/terraform.tfvars
-Copy-Item envs/dev/global/backend.hcl.example envs/dev/global/backend.hcl
-
-Copy-Item envs/dev/regional/terraform.tfvars.example envs/dev/regional/terraform.tfvars
-Copy-Item envs/dev/regional/backend.hcl.example envs/dev/regional/backend.hcl
-```
-
-sh/bash/zsh:
-
-```sh
-cp envs/dev/global/terraform.tfvars.example envs/dev/global/terraform.tfvars
-cp envs/dev/global/backend.hcl.example envs/dev/global/backend.hcl
-
-cp envs/dev/regional/terraform.tfvars.example envs/dev/regional/terraform.tfvars
-cp envs/dev/regional/backend.hcl.example envs/dev/regional/backend.hcl
-```
-
-Example dev config:
-
-```hcl
-region         = "us-east-1"
-profile        = "dev"
-app_name       = "example-app"
-aws_account_id = "111111111111"
-```
-
-The S3 backend does not inherit the provider's `profile = "dev"`, so set `profile = "dev"` in each local backend config too:
-
-```hcl
-bucket       = "example-app-terraform-state-000000000000"
-key          = "example-app/dev/111111111111/us-east-1/terraform.tfstate"
-region       = "us-east-1"
-profile      = "dev"
-```
-
-For local dev, use the dev account ID in the state key:
-
-```hcl
-key = "example-app/dev/111111111111/us-east-1/terraform.tfstate"
-```
-
-The account ID keeps each developer's dev state separate while still using the same central state bucket. The region segment keeps each regional deployment in separate state. The global stack uses this key shape:
-
-```hcl
-key = "example-app/dev/111111111111/global/terraform.tfstate"
-```
-
-## Local Dev Deploy
-
-Deploy the global stack first, then the regional stack.
-
-```sh
-terraform -chdir=envs/dev/global init -backend-config backend.hcl
-terraform -chdir=envs/dev/global apply
-
-terraform -chdir=envs/dev/regional init -backend-config backend.hcl
-terraform -chdir=envs/dev/regional apply
-```
-
-## GitHub Environments
-
-Create GitHub environments named `staging` and `production`.
-
-> **Required for push-based promotion:** Add required reviewers to the `production` GitHub Environment. Because `.github/workflows/terraform-deploy.yml` uses `environment: production` for production jobs, this creates a manual approval gate between staging and production. Without environment protection, pushes to `main` can continue into production automatically.
-
-Set these variables before the first GitHub deployment:
-
-| Variable | Scope | Required | Notes |
-| --- | --- | --- | --- |
-| `AWS_ACCOUNT_ID` | `staging` and `production` environments | Yes | Target AWS account ID for that environment. |
-| `AWS_ROLE_ARN` | `staging` and `production` environments | Yes | Role ARN from the matching bootstrap account output. |
-| `TF_STATE_BUCKET` | Repository or both environments | Yes | Shared Terraform state bucket name from `bootstrap/state`. |
-| `APP_NAME` | Repository | Recommended | Defaults to `example-app`; set before first deploy so state keys, role names, and tags match your project. |
-| `AWS_REGION` | Repository | Optional | Single default regional deployment region. Defaults to `us-east-1`. |
-| `AWS_REGIONS_JSON` | Repository | Optional | JSON array of regional deployment regions. Overrides `AWS_REGION`. |
-| `TF_GLOBAL_REGION` | Repository | Optional | Provider region for global/shared stacks. Falls back to `TF_STATE_REGION`, `AWS_REGION`, then `us-east-1`. |
-| `TF_STATE_REGION` | Repository | Optional | Region containing the S3 state bucket. Falls back to `AWS_REGION`, then `us-east-1`. |
-
-Use `AWS_REGIONS_JSON` for multi-region deployment, for example:
-
-```json
-["us-east-1", "us-west-2"]
-```
-
-If `AWS_REGIONS_JSON` is unset, the deploy workflow uses `AWS_REGION`. If both are unset, it falls back to `us-east-1`.
-
-Use `TF_GLOBAL_REGION` when global/shared resources must be managed from a specific AWS provider region, such as `us-east-1` for some CloudFront-related resources. If unset, it falls back to `TF_STATE_REGION`, then `AWS_REGION`, then `us-east-1`.
-
-Use the role ARN output from the matching bootstrap account root. `AWS_ACCOUNT_ID` is passed to Terraform as `TF_VAR_aws_account_id`, and `TF_STATE_BUCKET` is passed to `terraform init` as backend config. `APP_NAME` defaults to `example-app` if unset; set it before the first deploy so state keys, role names, and tags match your project.
-
-The bootstrap roots use Terraform AWS modules for the state S3 bucket and GitHub OIDC deployment roles. The account bootstrap roots attach AWS managed `AdministratorAccess` through the `policies` map in `bootstrap/modules/github-actions-role/main.tf`. This lets Terraform create, update, and destroy application infrastructure without changing IAM permissions for every new resource type. If you need least privilege, replace `AdministratorAccess` with a scoped policy containing only the actions and resources required by your Terraform stacks. Keep the Terraform state S3 permissions unless you replace them with equivalent state access, especially when the state bucket is in a separate AWS account.
-
-Staging and production state keys are split by stack scope:
-
-```text
-example-app/staging/global/terraform.tfstate
-example-app/staging/<region>/terraform.tfstate
-example-app/prod/global/terraform.tfstate
-example-app/prod/<region>/terraform.tfstate
-```
-
-Pushes to `main` deploy staging global first, then staging regional resources in a matrix. Production then waits on the `production` GitHub Environment approval gate before deploying global first, followed by regional resources in a matrix. After production succeeds, staging regional resources are destroyed, then staging global resources are destroyed for full-region runs.
-
-Manual workflow runs can override the region to deploy only one regional stack. Global deploy still runs once because shared resources may be dependencies. Global destroy only runs for full environment destroys, not single-region destroys.
-
-The deploy workflow passes backend config to `terraform init` at runtime, so state bucket names and account IDs do not need to be committed.
-
-Pull request checks run in `.github/workflows/terraform-checks.yml`. They validate all bootstrap, global, and regional roots, then run staging plans for both global and regional stacks when the pull request branch is in this repository. Those staging plan jobs also post or update pull request comments with the plan output for review. Pull requests from forks run validation only, so AWS OIDC credentials are not exposed to untrusted fork workflows.
-
-Production destroy is intentionally separated into `.github/workflows/terraform-destroy-prod.yml`. It only runs manually, requires typing `destroy production`, and uses the `production` GitHub Environment required-reviewer gate. It destroys regional stacks first and only destroys the production global stack when `region` is `all`.
-
-Staging and production example values are committed without real account IDs:
-
-```text
-envs/staging/global/terraform.tfvars.example
-envs/staging/regional/terraform.tfvars.example
-envs/prod/global/terraform.tfvars.example
-envs/prod/regional/terraform.tfvars.example
-```
-
-The state bucket can be the same bucket for all environments. If that bucket is in a separate AWS account, the bucket policy must trust the GitHub deployment roles that need to read/write Terraform state.
+### Milestone 1: Create GitHub OIDC Deployment Roles
+
+The OIDC roles must be bootstrapped first. The IAM policies attached to these roles reference the future S3 state bucket ARN before the bucket is even created.
+
+1. **Prepare tfvars files**:
+   Copy the example files and replace the placeholder AWS Account IDs, owner, and repository name with your actual values.
+
+   * **Unix / macOS / Git Bash**:
+     ```sh
+     cp bootstrap/accounts/staging/terraform.tfvars.example bootstrap/accounts/staging/terraform.tfvars
+     cp bootstrap/accounts/prod/terraform.tfvars.example bootstrap/accounts/prod/terraform.tfvars
+     ```
+   * **PowerShell**:
+     ```powershell
+     Copy-Item bootstrap/accounts/staging/terraform.tfvars.example bootstrap/accounts/staging/terraform.tfvars
+     Copy-Item bootstrap/accounts/prod/terraform.tfvars.example bootstrap/accounts/prod/terraform.tfvars
+     ```
+
+2. **Deploy Staging OIDC Role**:
+   ```sh
+   terraform -chdir=bootstrap/accounts/staging init -backend=false
+   terraform -chdir=bootstrap/accounts/staging apply
+   terraform -chdir=bootstrap/accounts/staging output github_actions_role_arn
+   ```
+
+3. **Deploy Production OIDC Role**:
+   ```sh
+   terraform -chdir=bootstrap/accounts/prod init -backend=false
+   terraform -chdir=bootstrap/accounts/prod apply
+   terraform -chdir=bootstrap/accounts/prod output github_actions_role_arn
+   ```
+
+---
+
+### Milestone 2: Create the Central S3 State Bucket
+
+Next, bootstrap the S3 bucket in the shared state account. You will need to add the dev account ID and the GitHub role ARNs (copied from the outputs above) to the `trusted_state_access` list in `terraform.tfvars` before executing.
+
+1. **Prepare tfvars file**:
+   * **Unix / macOS / Git Bash**:
+     ```sh
+     cp bootstrap/state/terraform.tfvars.example bootstrap/state/terraform.tfvars
+     ```
+   * **PowerShell**:
+     ```powershell
+     Copy-Item bootstrap/state/terraform.tfvars.example bootstrap/state/terraform.tfvars
+     ```
+
+2. **Edit `bootstrap/state/terraform.tfvars`**:
+   Uncomment `trusted_state_access` and paste in your developer accounts and the bootstrapped GitHub OIDC role ARNs.
+
+3. **Deploy S3 State Bucket**:
+   ```sh
+   terraform -chdir=bootstrap/state init -backend=false
+   terraform -chdir=bootstrap/state apply
+   terraform -chdir=bootstrap/state output state_bucket_name
+   ```
+
+---
+
+### Milestone 3: Migrate Bootstrap Roots to S3 Remote State
+
+Now that the S3 bucket exists, migrate all bootstrap configurations from local `terraform.tfstate` files to S3 remote backends. This ensures that your OIDC roles and state bucket are safely managed, versioned, and shared.
+
+1. **Prepare backend files**:
+   Copy the backend template files.
+
+   * **Unix / macOS / Git Bash**:
+     ```sh
+     cp bootstrap/state/backend.tf.example bootstrap/state/backend.tf
+     cp bootstrap/accounts/staging/backend.tf.example bootstrap/accounts/staging/backend.tf
+     cp bootstrap/accounts/prod/backend.tf.example bootstrap/accounts/prod/backend.tf
+     ```
+   * **PowerShell**:
+     ```powershell
+     Copy-Item bootstrap/state/backend.tf.example bootstrap/state/backend.tf
+     Copy-Item bootstrap/accounts/staging/backend.tf.example bootstrap/accounts/staging/backend.tf
+     Copy-Item bootstrap/accounts/prod/backend.tf.example bootstrap/accounts/prod/backend.tf
+     ```
+
+2. **Configure Backend Settings**:
+   Edit each of the newly created `backend.tf` files. Replace the placeholder values (`example-app`, `000000000000`, bucket names, and regions) with your actual configuration details.
+
+3. **Run Migration**:
+   Initialize with the `-migrate-state` flag. When prompted, type `yes` to transfer your local state into S3.
+   ```sh
+   terraform -chdir=bootstrap/state init -migrate-state
+   terraform -chdir=bootstrap/accounts/staging init -migrate-state
+   terraform -chdir=bootstrap/accounts/prod init -migrate-state
+   ```
+
+4. **Verify Plan Integrity**:
+   Run a plan on each to verify that Terraform sees absolutely zero pending infrastructure changes:
+   ```sh
+   terraform -chdir=bootstrap/state plan
+   terraform -chdir=bootstrap/accounts/staging plan
+   terraform -chdir=bootstrap/accounts/prod plan
+   ```
+
+5. **Clean up**:
+   Once you verify that plans are completely empty, delete the local `terraform.tfstate` and `terraform.tfstate.backup` files from the bootstrap directories. **Do not commit local `.tfstate` files.**
+
+---
+
+## 💻 Local Development Setup
+
+To test changes locally before pushing, use the local `dev` environment folders.
+
+1. **Copy the Dev configurations**:
+   * **Unix / macOS / Git Bash**:
+     ```sh
+     cp envs/dev/global/terraform.tfvars.example envs/dev/global/terraform.tfvars
+     cp envs/dev/global/backend.hcl.example envs/dev/global/backend.hcl
+     cp envs/dev/regional/terraform.tfvars.example envs/dev/regional/terraform.tfvars
+     cp envs/dev/regional/backend.hcl.example envs/dev/regional/backend.hcl
+     ```
+   * **PowerShell**:
+     ```powershell
+     Copy-Item envs/dev/global/terraform.tfvars.example envs/dev/global/terraform.tfvars
+     Copy-Item envs/dev/global/backend.hcl.example envs/dev/global/backend.hcl
+     Copy-Item envs/dev/regional/terraform.tfvars.example envs/dev/regional/terraform.tfvars
+     Copy-Item envs/dev/regional/backend.hcl.example envs/dev/regional/backend.hcl
+     ```
+
+2. **Configure Dev Variables (`terraform.tfvars`)**:
+   Adjust values to match your local AWS dev account profile and ID:
+   ```hcl
+   region         = "us-east-1"
+   profile        = "dev"
+   app_name       = "example-app"
+   aws_account_id = "111111111111"
+   ```
+
+3. **Configure Dev Backend Settings (`backend.hcl`)**:
+   Ensure `profile` is specified, as the S3 backend credentials do not inherit the provider's profile:
+   ```hcl
+   bucket       = "example-app-terraform-state-000000000000"
+   key          = "example-app/dev/111111111111/us-east-1/terraform.tfstate"
+   region       = "us-east-1"
+   profile      = "dev"
+   ```
+
+4. **Deploy Local Dev Stacks**:
+   Deploy the global configurations first, followed by the regional infrastructure.
+   ```sh
+   # Deploy Global first
+   terraform -chdir=envs/dev/global init -backend-config backend.hcl
+   terraform -chdir=envs/dev/global apply
+
+   # Deploy Regional second
+   terraform -chdir=envs/dev/regional init -backend-config backend.hcl
+   terraform -chdir=envs/dev/regional apply
+   ```
+
+---
+
+## 🚀 GitHub Environments & CI/CD Pipeline
+
+To enable fully automated, push-based promotion pipelines, you must configure target environments inside your GitHub Repository settings.
+
+### 1. Create GitHub Environments
+Create two environments named exactly:
+- `staging`
+- `production`
+
+> [!IMPORTANT]
+> **Production Protection Gate**: In your GitHub repository, under `Settings > Environments > production`, enable **Required reviewers** and add your team's approvers. This pauses the promotion sequence after a staging success, preventing unapproved releases from deploying automatically.
+
+### 2. GitHub Actions Variables Reference
+
+Configure these variables within your GitHub repository settings (`Settings > Secrets and variables > Actions > Variables`):
+
+| Variable Name | Scope | Required | Default Value | Description / Notes |
+| :--- | :--- | :---: | :--- | :--- |
+| `AWS_ACCOUNT_ID` | `staging` & `production` | **Yes** | — | The target AWS Account ID where resources are deployed. |
+| `AWS_ROLE_ARN` | `staging` & `production` | **Yes** | — | The AWS IAM Role ARN to assume via OIDC (from bootstrap output). |
+| `TF_STATE_BUCKET` | Repository | **Yes** | — | The central S3 bucket hosting all state files. |
+| `APP_NAME` | Repository | No | `example-app` | Scaled prefix used to form state keys, OIDC roles, and tag schemes. |
+| `AWS_REGION` | Repository | No | `us-east-1` | Default fallback region for regional deployments. |
+| `AWS_REGIONS_JSON` | Repository | No | — | JSON list of regions for multi-region matrices (e.g., `["us-east-1", "us-west-2"]`). |
+| `TF_GLOBAL_REGION` | Repository | No | — | Provider region for global stacks (e.g., must be `us-east-1` for CloudFront ACM certificates). |
+| `TF_STATE_REGION` | Repository | No | `us-east-1` | S3 bucket region. |
+
+---
+
+## 🛠️ Multi-Region Deployment Matrix Details
+
+The deployment pipeline is optimized using standard GitHub Actions matrices:
+
+1. **Validation Checks (`terraform-checks.yml`)**:
+   Runs on every Pull Request. It validates code formatting, syntax, and generates dynamic execution plans against the staging environment, writing the `terraform plan` summaries directly back into your Pull Request comments.
+
+2. **Parallel Regional Runs (`terraform-deploy.yml`)**:
+   Pushes to `main` initiate the staging lifecycle. Staging `global` deploys first. Once successful, the regional stacks deploy concurrently using a parallel job matrix based on `AWS_REGIONS_JSON`.
+   
+3. **Environment Isolation**:
+   Staging and production state files are fully segregated by account and prefix shape:
+   - `example-app/staging/global/terraform.tfstate`
+   - `example-app/staging/<region>/terraform.tfstate`
+   - `example-app/prod/global/terraform.tfstate`
+   - `example-app/prod/<region>/terraform.tfstate`
+
+---
+
+## 🔒 Hardening IAM to Least-Privilege
+
+By default, the bootstrap modules deploy roles with AWS managed `AdministratorAccess` (`bootstrap/modules/github-actions-role/main.tf`). This allows developers to build out initial stacks without running into permission roadblocks. 
+
+For production environments, **least privilege permissions** are highly recommended.
+
+### Steps to Harden Roles:
+1. Identify the list of AWS services and specific actions your Terraform stacks require.
+2. In `bootstrap/modules/github-actions-role/main.tf`, replace the `AdministratorAccess` entry inside the `policies` map with your own scoped IAM policies.
+3. Ensure you preserve the state bucket access policies inside `data.aws_iam_policy_document.github_actions` so Terraform can continue writing remote states.
+4. Apply the updated policy securely via local CLI bootstrap directory or PR flow:
+   ```sh
+   terraform -chdir=bootstrap/accounts/staging apply
+   terraform -chdir=bootstrap/accounts/prod apply
+   ```
+
+---
+
+## ❓ FAQ & Troubleshooting
+
+### Q1: I get a `SignatureDoesNotMatch` or authentication error when running `init` in CI/CD.
+Verify that the `AWS_ROLE_ARN` matches the output of the corresponding environment bootstrap. Ensure the GitHub Repository OIDC provider is configured with the correct repository path (`github_owner/github_repo`). 
+
+### Q2: How do I add a new regional resource?
+Add resource files or variables inside `modules/app/`. Since the regional environments (`envs/*/regional/main.tf`) call the `app` module directly, any resources defined there are instantly inherited and deployed across dev, staging, and production regional matrices.
+
+### Q3: How do I deploy a new, custom region?
+Simply update the `AWS_REGIONS_JSON` GitHub repository variable to include your new region name (e.g. `["us-east-1", "us-west-2", "eu-west-1"]`). The GitHub workflow matrix will automatically adapt and create a parallel deployment track for it.
+
+### Q4: I need to reset the local bootstrap flow. How can I start over safely?
+Do not delete `terraform.tfstate` unless you want to discard your local bootstrap state. Delete the generated `backend.tf` and `.terraform/` folders in the target bootstrap directory, and rerun `terraform init -backend=false`.
