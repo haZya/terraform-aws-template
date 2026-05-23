@@ -41,7 +41,7 @@ jobs:
             elif [ -n "$AWS_REGION" ]; then
               regions="$(jq -cn --arg region "$AWS_REGION" '[$region]')"
             else
-              regions='["ap-southeast-2"]'
+              regions='["us-east-1"]'
             fi
           elif [ -n "$INPUT_REGION" ]; then
             regions="$(jq -cn --arg region "$INPUT_REGION" '[$region]')"
@@ -150,10 +150,10 @@ jobs:
       TF_WORKING_DIR: envs/prod/global
       TF_STATE_BUCKET: ${{ vars.TF_STATE_BUCKET }}
       TF_STATE_KEY: ${{ vars.APP_NAME || 'example-app' }}/prod/global/terraform.tfstate
-      TF_STATE_REGION: ${{ vars.TF_STATE_REGION || vars.AWS_REGION || 'ap-southeast-2' }}
+      TF_STATE_REGION: ${{ vars.TF_STATE_REGION || vars.AWS_REGION || 'us-east-1' }}
       TF_VAR_aws_account_id: ${{ vars.AWS_ACCOUNT_ID }}
       TF_VAR_app_name: ${{ vars.APP_NAME || 'example-app' }}
-      TF_VAR_region: ${{ vars.TF_GLOBAL_REGION || vars.TF_STATE_REGION || vars.AWS_REGION || 'ap-southeast-2' }}
+      TF_VAR_region: ${{ vars.TF_GLOBAL_REGION || vars.TF_STATE_REGION || vars.AWS_REGION || 'us-east-1' }}
       AWS_ROLE_ARN: ${{ vars.AWS_ROLE_ARN }}
 
     steps:

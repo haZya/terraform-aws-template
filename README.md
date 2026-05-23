@@ -201,7 +201,7 @@ cp envs/dev/regional/backend.hcl.example envs/dev/regional/backend.hcl
 Example dev config:
 
 ```hcl
-region         = "ap-southeast-2"
+region         = "us-east-1"
 profile        = "dev"
 app_name       = "example-app"
 aws_account_id = "111111111111"
@@ -211,15 +211,15 @@ The S3 backend does not inherit the provider's `profile = "dev"`, so set `profil
 
 ```hcl
 bucket       = "example-app-terraform-state-000000000000"
-key          = "example-app/dev/111111111111/ap-southeast-2/terraform.tfstate"
-region       = "ap-southeast-2"
+key          = "example-app/dev/111111111111/us-east-1/terraform.tfstate"
+region       = "us-east-1"
 profile      = "dev"
 ```
 
 For local dev, use the dev account ID in the state key:
 
 ```hcl
-key = "example-app/dev/111111111111/ap-southeast-2/terraform.tfstate"
+key = "example-app/dev/111111111111/us-east-1/terraform.tfstate"
 ```
 
 The account ID keeps each developer's dev state separate while still using the same central state bucket. The region segment keeps each regional deployment in separate state. The global stack uses this key shape:
@@ -254,20 +254,20 @@ Set these variables before the first GitHub deployment:
 | `AWS_ROLE_ARN` | `staging` and `production` environments | Yes | Role ARN from the matching bootstrap account output. |
 | `TF_STATE_BUCKET` | Repository or both environments | Yes | Shared Terraform state bucket name from `bootstrap/state`. |
 | `APP_NAME` | Repository | Recommended | Defaults to `example-app`; set before first deploy so state keys, role names, and tags match your project. |
-| `AWS_REGION` | Repository | Optional | Single default regional deployment region. Defaults to `ap-southeast-2`. |
+| `AWS_REGION` | Repository | Optional | Single default regional deployment region. Defaults to `us-east-1`. |
 | `AWS_REGIONS_JSON` | Repository | Optional | JSON array of regional deployment regions. Overrides `AWS_REGION`. |
-| `TF_GLOBAL_REGION` | Repository | Optional | Provider region for global/shared stacks. Falls back to `TF_STATE_REGION`, `AWS_REGION`, then `ap-southeast-2`. |
-| `TF_STATE_REGION` | Repository | Optional | Region containing the S3 state bucket. Falls back to `AWS_REGION`, then `ap-southeast-2`. |
+| `TF_GLOBAL_REGION` | Repository | Optional | Provider region for global/shared stacks. Falls back to `TF_STATE_REGION`, `AWS_REGION`, then `us-east-1`. |
+| `TF_STATE_REGION` | Repository | Optional | Region containing the S3 state bucket. Falls back to `AWS_REGION`, then `us-east-1`. |
 
 Use `AWS_REGIONS_JSON` for multi-region deployment, for example:
 
 ```json
-["ap-southeast-2", "us-east-1"]
+["us-east-1", "us-west-2"]
 ```
 
-If `AWS_REGIONS_JSON` is unset, the deploy workflow uses `AWS_REGION`. If both are unset, it falls back to `ap-southeast-2`.
+If `AWS_REGIONS_JSON` is unset, the deploy workflow uses `AWS_REGION`. If both are unset, it falls back to `us-east-1`.
 
-Use `TF_GLOBAL_REGION` when global/shared resources must be managed from a specific AWS provider region, such as `us-east-1` for some CloudFront-related resources. If unset, it falls back to `TF_STATE_REGION`, then `AWS_REGION`, then `ap-southeast-2`.
+Use `TF_GLOBAL_REGION` when global/shared resources must be managed from a specific AWS provider region, such as `us-east-1` for some CloudFront-related resources. If unset, it falls back to `TF_STATE_REGION`, then `AWS_REGION`, then `us-east-1`.
 
 Use the role ARN output from the matching bootstrap account root. `AWS_ACCOUNT_ID` is passed to Terraform as `TF_VAR_aws_account_id`, and `TF_STATE_BUCKET` is passed to `terraform init` as backend config. `APP_NAME` defaults to `example-app` if unset; set it before the first deploy so state keys, role names, and tags match your project.
 

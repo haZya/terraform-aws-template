@@ -2,7 +2,7 @@ terraform {
   backend "s3" {
     bucket       = "example-app-terraform-state-000000000000"
     key          = "example-app/bootstrap/state/terraform.tfstate"
-    region       = "ap-southeast-2"
+    region       = "us-east-1"
     profile      = "shared-state"
     encrypt      = true
     use_lockfile = true
