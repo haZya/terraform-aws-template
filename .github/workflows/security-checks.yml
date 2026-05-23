@@ -1,0 +1,75 @@
+name: Security Checks
+
+on:
+  pull_request:
+    branches:
+      - main
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  trivy:
+    name: Trivy IaC Scan
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Run Trivy IaC scan
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          scan-type: config
+          scan-ref: .
+          format: json
+          output: trivy-results.json
+          severity: HIGH,CRITICAL
+          exit-code: "0"
+          hide-progress: true
+          timeout: 10m0s
+
+      - name: Publish Trivy summary
+        if: always()
+        run: |
+          {
+            echo "### Trivy IaC scan"
+            echo ""
+            echo "Scanning Terraform and other IaC files for HIGH and CRITICAL misconfigurations."
+            echo "This template reports findings without failing CI so initial bootstrap remains usable."
+            echo ""
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          if [ ! -f trivy-results.json ]; then
+            echo "Trivy did not produce a results file. Check the workflow logs." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          finding_count="$(jq '[.Results[]? | (.Misconfigurations // [])[]] | length' trivy-results.json)"
+
+          if [ "$finding_count" -gt 0 ]; then
+            {
+              echo "Found $finding_count HIGH or CRITICAL finding(s)."
+              echo ""
+              echo "<details><summary>Show findings</summary>"
+              echo ""
+              jq -r '
+                .Results[]? as $result
+                | ($result.Misconfigurations // [])[]
+                | "- [" + (.Severity // "UNKNOWN") + "] "
+                  + (.ID // .AVDID // "unknown") + " - "
+                  + (.Title // .Message // "Untitled finding") + " (`"
+                  + (($result.Target // .CauseMetadata.Filename // "unknown") | tostring)
+                  + (if .CauseMetadata.StartLine then ":" + (.CauseMetadata.StartLine | tostring) else "" end)
+                  + "`)"
+              ' trivy-results.json
+              echo ""
+              echo "</details>"
+            } >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "No HIGH or CRITICAL findings." >> "$GITHUB_STEP_SUMMARY"
+          fi
